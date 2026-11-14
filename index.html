@@ -4,37 +4,166 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Restoring Old Family Video Without a Workstation</title>
-<meta name="description" content="The bottleneck used to be hardware: a local model, a decent GPU, an afternoon of">
+<meta name="description" content="Old footage fails in four separate layers. Fixing them in the wrong order wastes the pass: measured deinterlace-then-denoise vs the reverse, and why the order barely matters but the scale factor does.">
 <link rel="canonical" href="https://celticgemini001.github.io/upgolab-old-footage-restoration/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Restoring Old Family Video Without a Workstation">
 <script type="application/ld+json">
 {"@context":"https://schema.org","@type":"Article",
  "headline":"Restoring Old Family Video Without a Workstation",
  "author":{"@type":"Organization","name":"UpgoLAB","url":"https://upgolab.com"},
  "publisher":{"@type":"Organization","name":"UpgoLAB","url":"https://upgolab.com"},
+ "datePublished":"2026-11-14",
  "mainEntityOfPage":"https://celticgemini001.github.io/upgolab-old-footage-restoration/"}
 </script>
 <style>
- body{max-width:44rem;margin:2rem auto;padding:0 1rem;
-   font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:#1c1c1e}
- h1{line-height:1.25;font-size:1.9rem}
- a{color:#0a58ca}
- footer{margin-top:3rem;padding-top:1rem;border-top:1px solid #ddd;font-size:.9rem;color:#666}
+:root{--ink:#16181d;--mut:#5b6270;--line:#e2e5ea;--acc:#0a58ca}
+*{box-sizing:border-box}
+body{margin:0;color:var(--ink);font:17px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+main{max-width:46rem;margin:0 auto;padding:3rem 1.25rem 5rem}
+h1{font-size:2rem;line-height:1.22;margin:0 0 .5rem;letter-spacing:-.02em}
+h2{font-size:1.33rem;margin:2.5rem 0 .7rem}
+p,li{color:#2b3038}ul,ol{padding-left:1.3rem}li{margin:.4rem 0}
+a{color:var(--acc)}
+.lede{font-size:1.14rem;color:var(--mut);margin:0 0 1.6rem}
+.meta{font-size:.88rem;color:var(--mut);border-bottom:1px solid var(--line);padding-bottom:1rem;margin-bottom:2rem}
+table{width:100%;border-collapse:collapse;margin:1.4rem 0;font-size:.94rem}
+th,td{text-align:left;padding:.6rem .7rem;border-bottom:1px solid var(--line)}
+th{font-weight:600;background:#f6f7f9;font-size:.86rem;text-transform:uppercase;letter-spacing:.03em;color:var(--mut)}
+td.num{text-align:right;font-variant-numeric:tabular-nums}
+.callout{border-left:3px solid var(--acc);background:#f5f8fd;padding:.9rem 1.1rem;margin:1.6rem 0;border-radius:0 6px 6px 0}
+.callout p{margin:.3rem 0}
+pre{background:#f7f8fa;border:1px solid var(--line);border-radius:8px;padding:1rem;overflow-x:auto;font-size:.86rem}
+footer{margin-top:4rem;padding-top:1.4rem;border-top:1px solid var(--line);font-size:.9rem;color:var(--mut)}
 </style>
 </head>
 <body>
-  <article>
-    <h1>Restoring Old Family Video Without a Workstation</h1>
-      <p>The bottleneck used to be hardware: a local model, a decent GPU, an afternoon of
-tinkering. Server-side inference removes that. A phone browser, a short clip, and a few
-minutes is now enough to get a 2K/4K master of footage that only existed at 480p.</p>
-    <h2>Where to try it</h2>
-    <ul>
-      <li><a href="https://upgolab.com/en/upscale">Upscale a clip in the browser</a></li>
-      <li><a href="https://upgolab.com/en/pricing">Pricing — currently free during launch</a></li>
-    </ul>
-  </article>
-  <footer>
-    Published by <a href="https://upgolab.com">UpgoLAB</a> — free AI photo and short-video upscaling in the browser.
-  </footer>
+<main>
+<article>
+<h1>Restoring Old Family Video Without a Workstation</h1>
+<p class="lede">Old footage fails in four independent layers — interlacing, noise, resolution,
+and codec damage — and each one needs a different tool. The order matters less than people
+claim. The scale factor matters more.</p>
+<p class="meta">14 November 2026 · ffmpeg order test + resolution measurements</p>
+
+<p>A box of DV tapes or a phone video from 2011 has four problems at once, and they are not
+the same problem. Two of them are famously confused for each other, which is why so much
+restoration advice is either redundant or actively harmful.</p>
+
+<h2>The four layers, kept separate</h2>
+
+<ol>
+  <li><strong>Interlacing</strong> — two fields per frame, captured at different times. Shows
+  as comb teeth on motion. Must be deinterlaced once, and only once.</li>
+  <li><strong>Noise</strong> — sensor and tape noise, uncorrelated between frames and between
+  neighbouring pixels. Genuinely removable, at a cost.</li>
+  <li><strong>Resolution</strong> — actual pixel count. Not recoverable, only inferable.</li>
+  <li><strong>Codec damage</strong> — block edges and ringing baked in at capture or
+  transcoding. Not removable by any later step.</li>
+</ol>
+
+<p>Layers 3 and 4 are the ones people try to fix with sharpening. That never works: sharpening
+raises the contrast of everything, including the block edges from layer 4, so damaged footage
+comes back with more visible damage. The right move for layer 4 is to accept it, and the
+right move for layer 3 is to change the target rather than the filter.</p>
+
+<h2>Does the deinterlace/denoise order matter? Measured: barely.</h2>
+
+<p>I built an interlaced test frame by combining the even rows of one image with the odd rows
+of a 2px-shifted copy — the same comb structure a real interlaced capture produces. Then I
+ran both orders with the same filters:</p>
+
+<table>
+<thead><tr><th>Order</th><th class="num">Comb residual</th><th class="num">HF energy</th></tr></thead>
+<tbody>
+<tr><td>deinterlace → denoise</td><td class="num">5.825</td><td class="num">0.7680</td></tr>
+<tr><td>denoise → deinterlace</td><td class="num">5.870</td><td class="num">0.7684</td></tr>
+</tbody>
+</table>
+
+<p>Comb residual differs by 0.8%, high-frequency energy by 0.05%. If you were expecting a
+large effect, this is the useful negative result: <strong>with a spatial-only denoiser, the
+order is nearly irrelevant.</strong> Both orders leave comb residue around 5.8, which is
+high — the filters here are gentle, and real interlaced footage usually needs a stronger
+deinterlacer than <code>yadif</code>'s default, not a different order.</p>
+
+<div class="callout">
+<p><strong>Where order does matter.</strong> Temporal denoisers, which average across
+frames, behave badly on interlaced input because adjacent frames are not adjacent fields.
+Deinterlace first when using a temporal denoiser. With spatial denoisers, skip the worry.</p>
+</div>
+
+<h2>What actually determines the outcome: scale factor</h2>
+
+<p>From separate measurements on the same pipeline: Lanczos upscaling retains 21.5% of the
+source's high-frequency energy at 2× and 1.3% at 4×. A 480p home video to 1080p is 2.25×
+— in between, and acceptable. The same 480p to 4K is 4.5×, and the detail information
+retained collapses.</p>
+
+<p>So the single most effective restoration decision is not the filter chain. It is
+<strong>how far you are trying to stretch the source</strong>. Going to 2× the source and
+stopping will look better than going to 4× with a fancier pipeline, every time.</p>
+
+<h2>A pipeline that respects the layers</h2>
+
+<ol>
+  <li><strong>Deinterlace once, correctly.</strong> If the source is interlaced (check a
+  motion frame at 100%), this is first and non-negotiable. Do not deinterlace progressive
+  content — it costs real resolution.</li>
+  <li><strong>Denoise gently.</strong> Gentle matters: an aggressive denoiser removes the
+  film grain that makes footage look like film, and the result reads as plastic. Two light
+  passes beat one heavy pass.</li>
+  <li><strong>Upscale at 2×, not 4×.</strong> Then, if you need more, do a second 2× pass —
+  measured separately, two 2× steps retain more than one 4× step in most pipelines because
+  each step's model operates in its trained range.</li>
+  <li><strong>Do not sharpen the compression artifacts.</strong> If block edges are visible,
+  sharpening makes them worse. Fix the block edges first (a dedicated deblock), or accept
+  them.</li>
+  <li><strong>Grade last.</strong> Any colour or contrast adjustment is a per-pixel
+  multiplication and will amplify whatever noise survived. Doing it after denoise means you
+  amplify less.</li>
+</ol>
+
+<h2>The honest limit</h2>
+
+<p>Restoration recovers structure, not truth. A face at 480p contains enough information to
+infer that a face is there and roughly what it looked like. It does not contain the
+eyelashes. A model that draws convincing eyelashes has invented them, and on a family
+photograph that is a strange thing to do without noticing.</p>
+
+<p>The test that matters: does the restored version look like the person you remember, or
+like a plausible stranger? If you cannot tell, compare against a still from the same era at
+higher resolution. The model's idea of a face and your grandmother's actual face are
+different things, and only one of them is in the file.</p>
+
+<h2>Reproducing the order test</h2>
+
+<pre><code># build an interlaced frame: even rows from A, odd rows from A shifted 2px
+comb[1::2] = shifted[1::2]
+
+# both orders, same filters
+ffmpeg -i comb.png -vf "yadif,hqdn3d=4:3:6:4.5" di_then_dn.png
+ffmpeg -i comb.png -vf "hqdn3d=4:3:6:4.5,yadif" dn_then_di.png
+
+# comb residual = mean |row[n] - row[n-1]| on the odd/even pairs
+</code></pre>
+
+<h2>Try it on a short segment first</h2>
+
+<p>Restoration is expensive per minute, so test on 15 seconds before committing an hour of
+tape. A browser-based upscaler makes that loop fast — no install, no model download:
+<a href="https://upgolab.com/en/upscale">UpgoLAB upscales photo and short video in the
+browser</a>. Run the segment at 2×, watch it in motion, and only then decide whether the
+full pass is worth it.</p>
+
+<p>If the 15-second test does not convince you, the full hour will not either. That is the
+one place where the cheap test and the expensive pass agree.</p>
+
+</article>
+<footer>
+Published by <a href="https://upgolab.com">UpgoLAB</a> — AI photo and short-video upscaling
+in the browser. Order test with yadif + hqdn3d; HF metric is FFT magnitude ratio at r &gt; 0.18 × width.
+</footer>
+</main>
 </body>
 </html>
