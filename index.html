@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Restoring Old Family Video Without a Workstation</title>
-<meta name="description" content="Old footage fails in four separate layers. Fixing them in the wrong order wastes the pass: measured deinterlace-then-denoise vs the reverse, and why the order barely matters but the scale factor does.">
+<meta name="description" content="Old footage fails in four separate layers. Measured: deinterlace/denoise order barely matters (0.8%), hqdn3d peaks at spatial 32 then reverses, nlmeans cuts 78.5% of sigma-10 noise, and sharpening a blocked frame raises blockiness 12.7%.">
 <link rel="canonical" href="https://celticgemini001.github.io/upgolab-old-footage-restoration/">
 <meta property="og:type" content="article">
 <meta property="og:title" content="Restoring Old Family Video Without a Workstation">
@@ -42,9 +42,9 @@ footer{margin-top:4rem;padding-top:1.4rem;border-top:1px solid var(--line);font-
 <article>
 <h1>Restoring Old Family Video Without a Workstation</h1>
 <p class="lede">Old footage fails in four independent layers — interlacing, noise, resolution,
-and codec damage — and each one needs a different tool. The order matters less than people
-claim. The scale factor matters more.</p>
-<p class="meta">14 November 2026 · ffmpeg order test + resolution measurements</p>
+and codec damage — and each one needs a different tool. Order barely matters for deinterlace
+and matters a lot for denoise. The scale factor matters most.</p>
+<p class="meta">14 November 2026 · ffmpeg order, denoise-strength and blocking measurements</p>
 
 <p>A box of DV tapes or a phone video from 2011 has four problems at once, and they are not
 the same problem. Two of them are famously confused for each other, which is why so much
@@ -93,6 +93,73 @@ frames, behave badly on interlaced input because adjacent frames are not adjacen
 Deinterlace first when using a temporal denoiser. With spatial denoisers, skip the worry.</p>
 </div>
 
+<h2>Denoise strength: hqdn3d stops working long before it stops trying</h2>
+
+<p>The order test above used gentle settings, so I went back and asked a different question:
+how hard do you have to push the denoiser before noise actually goes away, and what does that
+cost in detail? Same 480p frame, gaussian noise at sigma 10 added, upscaled 2× to 960×1440
+with lanczos. Reference is the clean frame at the same resolution.</p>
+
+<p>Noise is measured as the standard deviation of <code>output − reference</code> inside 832
+flat 24×24 blocks, so it counts residual noise and nothing else. Detail is high-frequency
+energy above r &gt; 0.18 of the frame, as a share of the clean version's HF.</p>
+
+<table>
+<thead><tr><th>Filter before upscale</th><th class="num">PSNR</th><th class="num">HF</th><th class="num">Residual σ</th><th class="num">Noise removed</th></tr></thead>
+<tbody>
+<tr><td>none</td><td class="num">29.33</td><td class="num">145.6%</td><td class="num">8.46</td><td class="num">—</td></tr>
+<tr><td>hqdn3d spatial 6</td><td class="num">29.39</td><td class="num">144.8%</td><td class="num">8.38</td><td class="num">0.9%</td></tr>
+<tr><td>hqdn3d spatial 12</td><td class="num">29.81</td><td class="num">139.4%</td><td class="num">7.86</td><td class="num">7.1%</td></tr>
+<tr><td>hqdn3d spatial 20</td><td class="num">30.47</td><td class="num">131.4%</td><td class="num">7.09</td><td class="num">16.2%</td></tr>
+<tr><td>hqdn3d spatial 32</td><td class="num"><strong>30.83</strong></td><td class="num">125.0%</td><td class="num"><strong>6.74</strong></td><td class="num">20.4%</td></tr>
+<tr><td>hqdn3d spatial 48</td><td class="num">30.67</td><td class="num">121.5%</td><td class="num">6.91</td><td class="num">18.3%</td></tr>
+<tr><td>hqdn3d spatial 64</td><td class="num">30.38</td><td class="num">119.6%</td><td class="num">7.19</td><td class="num">15.1%</td></tr>
+<tr><td>hqdn3d spatial 96</td><td class="num">29.90</td><td class="num">117.3%</td><td class="num">7.60</td><td class="num">10.2%</td></tr>
+<tr><td>nlmeans s=3 p=3 r=7</td><td class="num">34.50</td><td class="num">106.8%</td><td class="num">2.98</td><td class="num">64.8%</td></tr>
+<tr><td>nlmeans s=6 p=3 r=7</td><td class="num">35.38</td><td class="num">87.4%</td><td class="num">1.82</td><td class="num"><strong>78.5%</strong></td></tr>
+<tr><td>nlmeans s=10 p=3 r=7</td><td class="num">32.90</td><td class="num">68.6%</td><td class="num">1.77</td><td class="num">79.1%</td></tr>
+</tbody>
+</table>
+
+<p>Read the hqdn3d rows and the collapse is obvious: it peaks at spatial <strong>32</strong>,
+removes 20.4% of the noise, and then gets <em>worse</em> in every direction. At spatial 96 it
+removes less noise (10.2%) than at 20. This is not a tuning failure — hqdn3d is a bilateral-style
+spatial smoother, and once its range window is wide enough to smooth out sigma-10 noise it also
+smooths across edges. The filter is averaging real detail into the flat areas it creates. PSNR
+peaks at the same place, which is why tuning by PSNR alone lands you on the least-bad hqdn3d
+setting rather than a good one.</p>
+
+<p>nlmeans changes the arithmetic. At s=3 it removes <strong>64.8%</strong> of the noise while
+keeping 106.8% of the HF energy — more than the clean reference, because the noise it leaves
+behind is itself high-frequency. So "denoising destroys detail" needs qualification:
+<em>spatial</em> denoisers do, patch-based ones mostly don't. Non-local means finds similar
+patches elsewhere in the frame and averages those, which is how it can hit sigma-10 noise
+without flattening texture.</p>
+
+<div class="callout">
+<p><strong>Where the denoise goes in the chain does matter.</strong> Measured both ways with
+nlmeans s=6: denoise before the 2× upscale leaves residual σ <strong>1.82</strong> at HF 87.4%;
+denoise after the upscale leaves σ <strong>3.04</strong> at HF 89.8%. Denoising first is 40%
+lower residual noise for 2.4 points of HF — the one order effect in this article large enough
+to plan around, and the opposite of the gentle deinterlace/denoise result above.</p>
+</div>
+
+<p>Practical version: <code>hqdn3d</code> is a deblocker with a denoise label, useful at
+spatial 4–8 for light cleanup and actively counterproductive past 32. If the noise is real and
+you want it gone, use <code>nlmeans</code> at s=3–6 before the upscale. Raising the hqdn3d
+number and hoping it will start behaving like a denoiser is the one thing this table rules out.</p>
+
+<h2>Reproducing the denoise test</h2>
+
+<pre><code># clean 480p frame, add sigma-10 noise, then run the three orders
+ffmpeg -i noisy480.png -vf "scale=960:1440:flags=lanczos"                      ctrl.png
+ffmpeg -i noisy480.png -vf "nlmeans=s=6:p=3:r=7,scale=960:1440:flags=lanczos"  pre.png
+ffmpeg -i noisy480.png -vf "scale=960:1440:flags=lanczos,nlmeans=s=6:p=3:r=7"  post.png
+
+# residual sigma = std of (out - clean_960) inside flat 24x24 blocks,
+# flat = mean |grad| of the reference below 1.5; 832 blocks in this frame
+</code></pre>
+
 <h2>What actually determines the outcome: scale factor</h2>
 
 <p>From separate measurements on the same pipeline: Lanczos upscaling retains 21.5% of the
@@ -103,6 +170,56 @@ retained collapses.</p>
 <p>So the single most effective restoration decision is not the filter chain. It is
 <strong>how far you are trying to stretch the source</strong>. Going to 2× the source and
 stopping will look better than going to 4× with a fancier pipeline, every time.</p>
+
+<h2>Does sharpening amplify the block edges? Measured: yes, by 12.7%</h2>
+
+<p>The list above claims sharpening makes codec damage worse. That is easy to assert and easy
+to test, so I encoded the clean 480p frame at JPEG q18 to create real 8×8 block edges, decoded
+it, and put it through unsharp at three amounts, both before and after the 2× upscale.</p>
+
+<p>Blockiness here is the mean absolute pixel difference across 8-pixel grid boundaries divided
+by the mean difference across non-boundary neighbours. A frame with no grid structure scores
+close to 1.0; higher means visible blocking.</p>
+
+<table>
+<thead><tr><th>Pipeline</th><th class="num">PSNR</th><th class="num">Blockiness</th></tr></thead>
+<tbody>
+<tr><td>clean reference (never encoded)</td><td class="num">—</td><td class="num">1.093</td></tr>
+<tr><td>q18 blocked, no sharpening</td><td class="num">31.91</td><td class="num">1.454</td></tr>
+<tr><td>unsharp 0.5 before upscale</td><td class="num">30.40</td><td class="num">1.500</td></tr>
+<tr><td>unsharp 0.5 after upscale</td><td class="num">31.30</td><td class="num">1.517</td></tr>
+<tr><td>unsharp 1.0 before upscale</td><td class="num">28.24</td><td class="num">1.536</td></tr>
+<tr><td>unsharp 1.0 after upscale</td><td class="num">30.29</td><td class="num">1.570</td></tr>
+<tr><td>unsharp 2.0 before upscale</td><td class="num">25.25</td><td class="num">1.574</td></tr>
+<tr><td>unsharp 2.0 after upscale</td><td class="num">28.10</td><td class="num"><strong>1.639</strong></td></tr>
+</tbody>
+</table>
+
+<p>Sharpening at any amount raises blockiness, monotonically, and unsharp 2.0 after the upscale
+takes it from 1.454 to <strong>1.639 — a 12.7% increase in grid structure</strong> on footage that
+already had too much. The claim holds, and now it has a number.</p>
+
+<p>The unexpected half is the split between the two columns. Sharpening <em>before</em> the
+upscale adds less blockiness (1.574 vs 1.639) but costs far more PSNR (25.25 vs 28.10) — nearly
+3 dB. The upscale that follows a pre-sharpen pass smears the amplification into soft halos and
+loses real detail, which the PSNR catches and the blockiness metric does not. Sharpening
+<em>after</em> the upscale keeps PSNR higher but writes the grid back in at full strength on a
+frame where the grid is already 16 pixels wide.</p>
+
+<p>Neither ordering is a fix, which is the point. The only correct move for layer 4 is a
+dedicated deblock before anything else — and if you do not have one, do not sharpen. A soft
+frame with hidden blocking reads better than a crisp frame with visible blocking, because the
+eye finds regular structure far faster than it finds blur.</p>
+
+<h2>Reproducing the sharpen/blocking test</h2>
+
+<pre><code># create real 8x8 blocking, then sharpen at two points in the chain
+ffmpeg -i clean480.png -q:v 18 blocked.jpg
+ffmpeg -i blocked.jpg -vf "unsharp=5:5:2.0:5:5:0,scale=960:1440:flags=lanczos" pre.png
+ffmpeg -i blocked.jpg -vf "scale=960:1440:flags=lanczos,unsharp=5:5:2.0:5:5:0" post.png
+
+# blockiness = mean|dx| on columns where col%8==7, divided by mean|dx| elsewhere
+</code></pre>
 
 <h2>A pipeline that respects the layers</h2>
 
@@ -162,7 +279,7 @@ one place where the cheap test and the expensive pass agree.</p>
 </article>
 <footer>
 Published by <a href="https://upgolab.com">UpgoLAB</a> — AI photo and short-video upscaling
-in the browser. Order test with yadif + hqdn3d; HF metric is FFT magnitude ratio at r &gt; 0.18 × width.
+in the browser. Order test with yadif + hqdn3d + nlmeans; HF metric is FFT magnitude ratio at r &gt; 0.18 × width; noise measured as residual σ in 832 flat 24×24 blocks.
 
 <style>
 .sisternav{margin:2rem 0 0;padding-top:1.2rem;border-top:1px solid #e2e5ea}
