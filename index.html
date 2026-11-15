@@ -4,16 +4,18 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Restoring Old Family Video Without a Workstation</title>
-<meta name="description" content="Old footage fails in four separate layers. Measured: deinterlace/denoise order barely matters (0.8%), hqdn3d peaks at spatial 32 then reverses, nlmeans cuts 78.5% of sigma-10 noise, sharpening a blocked frame raises blockiness 12.7%, and 60% of a 59.94 fps file is duplicate frames that save 20% compute but 0% bitrate.">
+<meta name="description" content="Old footage fails in four separate layers, measured. Deinterlace/denoise order barely matters (0.8%), hqdn3d peaks at spatial 32 then reverses, nlmeans cuts 78.5% of sigma-10 noise, sharpening a blocked frame raises blockiness 12.7%, 60% of a 59.94 fps file is duplicate frames saving 20% compute but 0% bitrate. Deinterlacers split by 7.7 dB on invented rows while weave wins PSNR and carries 266x the comb, and deinterlacing before the upscale is worth 0.6 dB against a 21% encode-cost difference.">
 <link rel="canonical" href="https://celticgemini001.github.io/upgolab-old-footage-restoration/">
 <meta property="og:type" content="article">
 <meta property="og:title" content="Restoring Old Family Video Without a Workstation">
+<meta property="og:description" content="Measured: deinterlacer choice splits invented-row quality by 7.7 dB, weave wins PSNR with 266x the comb, and deinterlacing before the upscale is worth 0.6 dB.">
 <script type="application/ld+json">
 {"@context":"https://schema.org","@type":"Article",
  "headline":"Restoring Old Family Video Without a Workstation",
  "author":{"@type":"Organization","name":"UpgoLAB","url":"https://upgolab.com"},
  "publisher":{"@type":"Organization","name":"UpgoLAB","url":"https://upgolab.com"},
  "datePublished":"2026-11-14",
+ "dateModified":"2026-11-15",
  "mainEntityOfPage":"https://celticgemini001.github.io/upgolab-old-footage-restoration/"}
 </script>
 <style>
@@ -324,6 +326,289 @@ d = np.abs(np.diff(a, axis=0)).mean(axis=(1, 2))   # per-pair mean abs diff
 dup = d < 0.1                                       # flat 0.1..1.0 all agree
 print(len(a), 'frames,', dup.sum(), 'duplicates',
       f'{100*dup.sum()/len(a):.1f}%')</code></pre>
+
+<h2>Is the file even interlaced? Here is a detector with a number</h2>
+
+<p>Everything above says "check a motion frame at 100%". That is a eyeball test with no
+threshold, and it fails in the one case that matters: a soft tape where the comb teeth are
+only a few levels deep. So I measured one.</p>
+
+<p>The statistic is the asymmetry in adjacent-row steps. In a woven frame, even→odd
+transitions are between fields and odd→even transitions are within a field, so the two
+populations have different means. In a progressive frame they are the same population.
+<i>comb = |mean(even→odd) − mean(odd→even)| / (mean(even→odd) + mean(odd→even))</i>.</p>
+
+<table>
+<thead><tr><th>Content</th><th class="num">comb ratio</th></tr></thead>
+<tbody>
+<tr><td>interlaced capture, 1 px/frame pan</td><td class="num"><strong>0.4906</strong></td></tr>
+<tr><td>same scene, progressive</td><td class="num">0.0000</td></tr>
+<tr><td>interlaced capture, <em>no motion at all</em></td><td class="num">0.0001</td></tr>
+</tbody>
+</table>
+
+<p>Two things to take from that table. The gap between 0.49 and 0.00 is wide enough that
+you do not need a threshold, just "not zero". And a static shot of interlaced footage scores
+0.0001 — because with no motion the two fields are the same image, so there is nothing to
+detect. <strong>The detector needs motion, which is exactly why the advice says "a motion
+frame" and exactly why sampling a locked-off shot gives a false negative.</strong></p>
+
+<h2>What deinterlacing actually costs, measured per row</h2>
+
+<p>A 50i frame contains two fields half a frame apart. One of them has to be invented. A
+single PSNR over the whole frame hides this, so I split it: even rows keep the captured
+field, odd rows are the interpolator's invention. Report the two separately and the filter
+ranking changes completely.</p>
+
+<p>Setup: analytic vertical sinusoid, 720×540, panning 1 px/frame, fields 0.5 frame apart,
+ground truth evaluated at the temporal midpoint (0.25 frame). Twelve frequencies, five
+filters, odd-row PSNR only:</p>
+
+<table>
+<thead><tr><th class="num">f (cyc/px)</th><th class="num">weave</th><th class="num">yadif</th><th class="num">bwdif</th><th class="num">w3fdif</th><th class="num">estdif</th></tr></thead>
+<tbody>
+<tr><td class="num">0.04</td><td class="num">36.21</td><td class="num">34.98</td><td class="num">35.59</td><td class="num">35.71</td><td class="num">35.97</td></tr>
+<tr><td class="num">0.08</td><td class="num">30.12</td><td class="num">27.35</td><td class="num">29.32</td><td class="num">29.64</td><td class="num">29.86</td></tr>
+<tr><td class="num">0.12</td><td class="num">26.66</td><td class="num">22.09</td><td class="num">26.27</td><td class="num">26.76</td><td class="num">25.62</td></tr>
+<tr><td class="num">0.16</td><td class="num">24.13</td><td class="num">18.12</td><td class="num">23.69</td><td class="num">24.42</td><td class="num">21.14</td></tr>
+<tr><td class="num">0.20</td><td class="num">22.30</td><td class="num">15.05</td><td class="num">21.18</td><td class="num">22.50</td><td class="num">16.65</td></tr>
+<tr><td class="num">0.24</td><td class="num">20.65</td><td class="num">12.65</td><td class="num">17.98</td><td class="num">19.84</td><td class="num">12.87</td></tr>
+</tbody>
+</table>
+
+<p><strong>yadif is the worst of the four at every frequency from 0.04 to 0.24.</strong> The gap to
+the best filter runs 0.73 dB at the coarse end, crosses 3 dB at 0.10 cyc/px, peaks at
+<strong>7.71 dB at 0.22</strong>, and then collapses to 6.45 dB at 0.25 because everything
+collapses there. Measured another way, on the same frame: at 0.12 cyc/px yadif's invented
+rows keep <strong>72.9%</strong> of the sinusoid's amplitude, estdif 89.7%, bwdif 96.9%,
+w3fdif 97.1%. yadif is not a light deinterlacer, it is a spatial-only interpolator with a
+temporal nudge, and on texture it behaves like one.</p>
+
+<p>yadif is also the default in so many recipes. That is the finding: the filter nearly
+everyone reaches for first is the one that costs the most detail, by 7 dB, in the band that
+matters for 480p tape.</p>
+
+<div class="callout">
+<p><strong>The penalty can go negative, and that is not a bug.</strong> For w3fdif the
+even-row PSNR minus odd-row PSNR runs −0.26 dB at 0.16 cyc/px — the <em>invented</em> rows
+sit closer to the reference than the <em>captured</em> ones. The reason is temporal, not
+spatial: in a 50i frame neither field is at the reference instant. Both are 0.25 frame away.
+A motion-compensating interpolator can pull the invented row toward the midpoint while the
+captured row stays stale. So "even rows are ground truth" is a convenient fiction, and any
+quality metric that assumes it will mis-rank the motion-compensating filters.</p>
+</div>
+
+<h2>The paradox: the filter that wins PSNR is the one you must not use</h2>
+
+<p>Read the PSNR table again. weave — no deinterlacing at all — wins every row, including a
+0.01 dB even/odd penalty at 0.25 cyc/px. That is not a rounding artefact and it is not a
+harness bug. It is a property of comparing one timestamp: weave's odd rows are real pixels,
+merely stale by 0.5 frame, and a small phase error costs less in MSE than a blurred
+interpolation does. Measured at 0.12 cyc/px: weave keeps 99.9% of the amplitude with a
++10.8° phase error, versus yadif's 72.9% amplitude with −10.9°. Amplitude loss is what PSNR
+punishes; a phase shift it barely notices.</p>
+
+<p>The artefact that a phase shift produces has a name, and it is not in the PSNR. It is comb.
+Measuring both on the same output:</p>
+
+<table>
+<thead><tr><th>Output</th><th class="num">odd-row PSNR</th><th class="num">comb ratio</th></tr></thead>
+<tbody>
+<tr><td>weave (stale field)</td><td class="num"><strong>26.66</strong></td><td class="num"><strong>0.4793</strong></td></tr>
+<tr><td>yadif</td><td class="num">22.09</td><td class="num">0.0018</td></tr>
+<tr><td>bwdif</td><td class="num">26.27</td><td class="num">0.0012</td></tr>
+<tr><td>w3fdif</td><td class="num">26.76</td><td class="num">0.0012</td></tr>
+<tr><td>estdif</td><td class="num">25.62</td><td class="num">0.0011</td></tr>
+</tbody>
+</table>
+
+<p>weave scores 4.6 dB <em>better</em> than yadif on PSNR and carries <strong>266× more
+comb</strong> — 0.4793 against 0.0018. A metric that ranks on PSNR alone recommends the
+option that leaves visible tearing across every moving edge. Any deinterlacing comparison
+that reports only PSNR is measuring the wrong error.</p>
+
+<p>And weave's error does not stay bounded. Its odd rows are stale by 0.5 frame × pan, so the
+phase error is 360° × f × 0.5 × pan and grows without limit as content moves faster. Sweeping
+pan at f = 0.12:</p>
+
+<table>
+<thead><tr><th class="num">pan (px/frame)</th><th class="num">weave phase error</th><th class="num">weave</th><th class="num">yadif</th><th class="num">bwdif</th><th class="num">w3fdif</th></tr></thead>
+<tbody>
+<tr><td class="num">0.25</td><td class="num">5.4°</td><td class="num">38.63</td><td class="num">28.19</td><td class="num">36.59</td><td class="num">37.33</td></tr>
+<tr><td class="num">1.00</td><td class="num">21.6°</td><td class="num">26.66</td><td class="num">22.09</td><td class="num">26.27</td><td class="num">26.76</td></tr>
+<tr><td class="num">2.00</td><td class="num">43.2°</td><td class="num">20.65</td><td class="num">19.60</td><td class="num">20.23</td><td class="num">21.04</td></tr>
+<tr><td class="num">4.00</td><td class="num">86.4°</td><td class="num">14.80</td><td class="num">15.39</td><td class="num">14.50</td><td class="num">15.57</td></tr>
+<tr><td class="num">8.00</td><td class="num">172.8°</td><td class="num">9.40</td><td class="num">11.87</td><td class="num">11.41</td><td class="num">10.98</td></tr>
+</tbody>
+</table>
+
+<p>Predicted phase error (from the formula) tracks the measured one exactly at every speed.
+weave's <strong>10.4 dB</strong> advantage on the slowest content becomes a <strong>2.5 dB
+deficit</strong> on the fastest, because the stale field is now half a cycle out of position
+— a 12.9 dB swing across a 32× pan range. All four real filters stay within 2.5 dB of each
+other for the same range, and their spread <em>shrinks</em> as motion increases (9.1 dB at
+0.25 px/frame down to 2.0 dB at 8 px/frame): <strong>filter choice only matters on slow
+content, which is the opposite of the intuition that fast motion needs the fancier
+algorithm.</strong> interpolation error depends on content, weave's error depends on speed.
+That is the actual distinction, and it is why "weave is fine if it looks fine" survives
+casual inspection and fails on a panning shot.</p>
+
+<h2>Does deinterlacing before the upscale beat after? Yes, by less than a dB</h2>
+
+<p>The layer list says deinterlace first and non-negotiable. It never said how much it was
+worth. Measured on a 2D scene with sloped edges and texture, both pipelines against an
+analytically rendered 1440×1080 ground truth (not a nearest-neighbour repeat, which flatters
+whichever pipeline is blurrier):</p>
+
+<table>
+<thead><tr><th>Filter</th><th class="num">deint → 2×</th><th class="num">2× → deint</th><th class="num">advantage</th></tr></thead>
+<tbody>
+<tr><td>yadif</td><td class="num">32.66</td><td class="num">31.99</td><td class="num">+0.67</td></tr>
+<tr><td>bwdif</td><td class="num">32.60</td><td class="num">31.89</td><td class="num">+0.71</td></tr>
+<tr><td>w3fdif</td><td class="num">32.61</td><td class="num">31.99</td><td class="num">+0.62</td></tr>
+<tr><td>estdif</td><td class="num">32.56</td><td class="num">31.97</td><td class="num">+0.59</td></tr>
+</tbody>
+</table>
+
+<p>Half a decibel, consistent across all four filters and both directions of the ± sign, so it
+is real rather than noise. Half a decibel is not nothing, but it is not the 7 dB that choosing
+the right interpolator is worth. <strong>Order matters less than filter choice, which is the
+opposite of where all the advice puts the emphasis.</strong> Do both — deinterlace first
+<em>and</em> pick something better than yadif — but if you can only fix one, fix the filter.</p>
+
+<h2>What it costs to deinterlace a file that was never interlaced</h2>
+
+<p>Also asserted above with no number: do not deinterlace progressive content. Measured on
+progressive 2D content at three pan speeds:</p>
+
+<table>
+<thead><tr><th class="num">pan</th><th class="num">yadif</th><th class="num">bwdif</th><th class="num">w3fdif</th><th class="num">estdif</th></tr></thead>
+<tbody>
+<tr><td class="num">0</td><td class="num">59.72</td><td class="num">59.74</td><td class="num">54.05</td><td class="num">55.86</td></tr>
+<tr><td class="num">1</td><td class="num">59.73</td><td class="num">59.74</td><td class="num">54.05</td><td class="num">55.85</td></tr>
+<tr><td class="num">4</td><td class="num">59.75</td><td class="num">59.77</td><td class="num">54.08</td><td class="num">55.87</td></tr>
+</tbody>
+</table>
+
+<p>yadif and bwdif are <em>inert</em> on progressive input — 59.7 dB is transparency, they
+detect no comb and pass the frame through. estdif and w3fdif are not: 55.9 and 54.1 dB means
+they rewrite rows even when nothing asked them to, and w3fdif's 5.7 dB is visible on a
+gradient. So the folk rule is wrong in both directions. Deinterlacing progressive content is
+free with yadif and bwdif, and a real loss with the two filters that are otherwise better
+interpolators. Marking a progressive file as interlaced and running w3fdif over it is the one
+combination that hurts.</p>
+
+<div class="callout">
+<p><strong>One case where the question is unanswerable.</strong> Feed a progressive frame
+containing pure vertical detail at 0.25 cyc/px — a hard weave pattern, a striped shirt, a
+venetian blind — and bwdif drops it from 56 dB to <strong>21.16 dB</strong>. That is not a
+bug: an alternating-every-2-rows pattern <em>is</em> comb, and no detector can distinguish the
+two from a single frame. The practical consequence: vertical stripes at half-Nyquist get
+destroyed by every deinterlacer, so check a striped surface before trusting an automatic
+decision. It also explains why a per-file comb ratio of 0.49 is trustworthy but a per-file
+decision on a striped shirt is not.</p>
+</div>
+
+<h2>Bitrate: the deinterlacer choice moves CRF 20 output by 21%</h2>
+
+<p>Encoding the same 8-frame interlaced 2D clip at CRF 20, yuv420p:</p>
+
+<table>
+<thead><tr><th>Pre-encode deinterlace</th><th class="num">bytes</th><th class="num">vs weave</th></tr></thead>
+<tbody>
+<tr><td>none (weave)</td><td class="num">52,295</td><td class="num">—</td></tr>
+<tr><td>yadif</td><td class="num">43,666</td><td class="num">−16.50%</td></tr>
+<tr><td>w3fdif</td><td class="num">44,690</td><td class="num">−14.54%</td></tr>
+<tr><td>estdif</td><td class="num">44,441</td><td class="num">−15.02%</td></tr>
+<tr><td>bwdif</td><td class="num">41,193</td><td class="num"><strong>−21.23%</strong></td></tr>
+</tbody>
+</table>
+
+<p>Comb is expensive to encode — a woven frame costs 21% more bits than the same frame
+deinterlaced, because every comb edge is high-frequency residual that the transform has to
+spend coefficients on. bwdif is also 5.66% smaller than yadif while scoring 4.2 dB better on
+invented rows at 0.12 cyc/px. Cheaper <em>and</em> better: the usual rate–quality tradeoff does
+not apply here, because yadif's 27% amplitude loss is precisely the detail x264 would have had
+to spend bits to keep.</p>
+
+<h2>Reproducing the deinterlace measurements</h2>
+
+<pre><code>import subprocess, numpy as np
+
+W, H, N, PAN = 720, 540, 8, 1.0
+def vert(f, dy):                     # analytic scene, any sub-pixel offset
+    y = np.arange(H)[:, None] + dy
+    return np.repeat(0.5 + 0.35*np.sin(2*np.pi*f*y), W, axis=1).astype(np.float32)
+
+# 50i: even rows from field at t, odd rows from field at t + 0.5 frame
+vf = np.empty((N, H, W), np.float32)
+for k in range(N):
+    a, b = vert(0.12, PAN*k), vert(0.12, PAN*k + 0.5*PAN)
+    fr = np.empty((H, W), np.float32); fr[0::2] = a[0::2]; fr[1::2] = b[1::2]
+    vf[k] = fr
+
+# reference is the UNSEEN progressive frame at the temporal midpoint -- never a
+# transformed copy of the input, or the test compares a frame with itself
+gt = np.stack([vert(0.12, PAN*k + 0.25*PAN) for k in range(N)])
+
+def run(v, vf_filter):
+    raw = (np.clip(v, 0, 1)*255 + 0.5).astype(np.uint8).tobytes()
+    out = subprocess.run(['ffmpeg','-v','error','-f','rawvideo','-pix_fmt','gray',
+                          '-s',f'{W}x{H}','-r','25','-i','-','-vf',vf_filter,
+                          '-f','rawvideo','-pix_fmt','gray','-'],
+                         input=raw, capture_output=True).stdout
+    return np.frombuffer(out, np.uint8).reshape(-1, H, W).astype(np.float32)/255
+
+def psnr(a, b):
+    return 10*np.log10(1.0/((a-b)**2).mean())
+
+for name, f in [('yadif','yadif=mode=send_frame:deint=all'),
+                ('bwdif','bwdif=mode=send_frame:deint=all'),
+                ('w3fdif','w3fdif=filter=complex:deint=all')]:
+    o = run(vf, f)
+    o = o[::len(o)//N][-N:]                      # send_field emits 2 frames per input
+    print(name, 'odd rows',
+          round(psnr(o[:,1::2], gt[:,1::2]), 2),
+          'even rows', round(psnr(o[:,0::2], gt[:,0::2]), 2))
+
+# comb ratio -- the metric PSNR cannot see
+def comb(img):
+    d = np.abs(np.diff(img, axis=0)).mean(axis=1)
+    return abs(d[0::2].mean() - d[1::2].mean()) / (d[0::2].mean() + d[1::2].mean())
+</code></pre>
+
+<h2>Four mistakes this measured section exists to prevent</h2>
+
+<p>Every number above is from a harness that was wrong at least once first. The failures are
+worth more than the results, because each one produced a plausible number.</p>
+
+<ol>
+  <li><strong>Measured phase on the mean of moving frames.</strong> Averaging a panning
+  sinusoid over a full period cancels it to DC, so every filter appeared to keep ~99% of its
+  amplitude and weave appeared to have 0.0° of phase error — a perfect score for the option
+  that leaves visible comb. Fixed by measuring one frame against the truth for that same
+  timestamp, and by measuring odd rows separately: even and odd rows carry symmetric errors
+  (+0.25 and −0.25 frame) that cancel to zero in a row-mean.</li>
+  <li><strong>Scaled the vertical axis but not the horizontal one when rendering the 2×
+  ground truth.</strong> Every filter then scored an identical 9.21 dB. When four different
+  filters agree to two decimals, the reference is misaligned, not the filters equivalent.
+  Fixed by sharing one scene→pixel pitch across both axes, which moved the result to
+  32.6 vs 32.0 dB.</li>
+  <li><strong>Used a sloped-edge statistic that read 3.3 for every filter, including
+  weave.</strong> It was measuring the scene's own edge slope, not tearing — the intercept
+  dominated the metric. Fixed by switching to the adjacent-row asymmetry, which reads 0.4793
+  for weave and 0.0012 for a real deinterlacer, a 400× separation instead of 4%.</li>
+  <li><strong>Assumed even rows were ground truth.</strong> In a 50i frame neither field is
+  at the reference instant; both are 0.25 frame away. That is why w3fdif can score a negative
+  penalty — its invented rows are better aligned in time than the captured ones. Any metric
+  built on "even rows are truth" mis-ranks the motion-compensating filters, which is exactly
+  the class you most want to rank correctly.</li>
+</ol>
+
+<p>Three of those four produced numbers in a believable range. Only the 9.21 dB tie announced
+itself as impossible. The asserts that caught the rest were the cheap ones: a static input
+must come back bit-identical, white noise must pass at ratio 1.00, and two filters must not
+be allowed to score the same to two decimals on different algorithms.</p>
 
 <h2>The honest limit</h2>
 
