@@ -38,6 +38,15 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
 pre{background:#f7f8fa;border:1px solid var(--line);border-radius:8px;padding:1rem;overflow-x:auto;font-size:.86rem}
 footer{margin-top:4rem;padding-top:1.4rem;border-top:1px solid var(--line);font-size:.9rem;color:var(--mut)}
 </style>
+<style>
+.sisternav{margin:2rem 0 0;padding-top:1.2rem;border-top:1px solid #e2e5ea}
+.sisternav p{font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;
+ color:#5b6270;margin:0 0 .6rem}
+.sisternav ul{list-style:none;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:.4rem .9rem}
+.sisternav li{margin:0;font-size:.88rem;line-height:1.4}
+.sisternav a{text-decoration:none;border-bottom:1px solid #d5dae2}
+.sisternav a:hover{border-bottom-color:#0a58ca}
+</style>
 </head>
 <body>
 <main>
@@ -139,7 +148,7 @@ patches elsewhere in the frame and averages those, which is how it can hit sigma
 without flattening texture.</p>
 
 <div class="callout">
-<p><strong>Where the denoise goes in the chain does matter.</strong> Measured both ways with
+<p><strong>Where the <a href="https://celticgemini001.github.io/upgolab-noise-and-grain-upscaling/">denoise</a> goes in the chain does matter.</strong> Measured both ways with
 nlmeans s=6: denoise before the 2× upscale leaves residual σ <strong>1.82</strong> at HF 87.4%;
 denoise after the upscale leaves σ <strong>3.04</strong> at HF 89.8%. Denoising first is 40%
 lower residual noise for 2.4 points of HF — the one order effect in this article large enough
@@ -400,7 +409,7 @@ quality metric that assumes it will mis-rank the motion-compensating filters.</p
 
 <h2>The paradox: the filter that wins PSNR is the one you must not use</h2>
 
-<p>Read the PSNR table again. weave — no deinterlacing at all — wins every row, including a
+<p>Read the PSNR table again. weave — no <a href="https://celticgemini001.github.io/upgolab-video-upscaling-limits/">deinterlacing</a> at all — wins every row, including a
 0.01 dB even/odd penalty at 0.25 cyc/px. That is not a rounding artefact and it is not a
 harness bug. It is a property of comparing one timestamp: weave's odd rows are real pixels,
 merely stale by 0.5 frame, and a small phase error costs less in MSE than a blurred
@@ -649,16 +658,6 @@ one place where the cheap test and the expensive pass agree.</p>
 <footer>
 Published by <a href="https://upgolab.com">UpgoLAB</a> — AI photo and short-video upscaling
 in the browser. Order test with yadif + hqdn3d + nlmeans; HF metric is FFT magnitude ratio at r &gt; 0.18 × width; noise measured as residual σ in 832 flat 24×24 blocks.
-
-<style>
-.sisternav{margin:2rem 0 0;padding-top:1.2rem;border-top:1px solid #e2e5ea}
-.sisternav p{font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;
- color:#5b6270;margin:0 0 .6rem}
-.sisternav ul{list-style:none;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:.4rem .9rem}
-.sisternav li{margin:0;font-size:.88rem;line-height:1.4}
-.sisternav a{text-decoration:none;border-bottom:1px solid #d5dae2}
-.sisternav a:hover{border-bottom-color:#0a58ca}
-</style>
 
 <nav class="sisternav" aria-label="More measured upscaling guides">
 <p>More measured guides</p>
